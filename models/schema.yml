@@ -1,0 +1,140 @@
+# schema.yml
+# PURPOSE: Automated data quality tests for healthcare streaming pipeline
+# dbt runs ALL these tests after every transformation
+# Any failure stops the pipeline before bad data reaches clinical dashboards
+#
+# In real healthcare systems: data quality is not optional
+# Wrong vitals data can affect clinical decisions — tests are mandatory
+# Same dbt testing pattern used in enterprise production pipelines
+
+version: 2
+
+sources:
+  - name: healthcare_raw
+    description: "Raw patient vitals data streamed from Apache Kafka into Snowflake"
+    database: HEALTHCARE_RAW
+    schema: PUBLIC
+    tables:
+      - name: RAW_PATIENT_VITALS
+        description: "One row per patient monitor reading — raw, unvalidated vitals from Kafka consumer"
+        columns:
+          - name: PATIENT_ID
+            description: "Unique patient identifier — format PAT-XXXX"
+            tests:
+              - not_null
+          - name: READING_TIMESTAMP
+            description: "UTC timestamp when the monitor took the reading"
+            tests:
+              - not_null
+          - name: HOSPITAL_ID
+            description: "Hospital identifier"
+            tests:
+              - not_null
+
+models:
+  - name: stg_patient_vitals
+    description: "Cleaned and clinically validated patient vitals. Adds alert flags and status classifications per vital sign."
+    columns:
+      - name: patient_id
+        description: "Patient identifier — trimmed and standardized"
+        tests:
+          - not_null
+
+      - name: ward
+        description: "Hospital ward where patient is admitted"
+        tests:
+          - not_null
+          - accepted_values:
+              values: [
+                'ICU',
+                'Emergency',
+                'Cardiology',
+                'General Ward A',
+                'General Ward B',
+                'Pediatrics'
+              ]
+
+      - name: patient_condition
+        description: "Patient's current clinical condition"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Stable', 'Critical', 'Recovering', 'Under Observation']
+
+      - name: heart_rate_status
+        description: "Clinical classification of heart rate reading"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['NORMAL', 'TACHYCARDIA', 'BRADYCARDIA']
+
+      - name: bp_status
+        description: "Blood pressure classification based on clinical thresholds"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['NORMAL', 'HIGH', 'LOW', 'HYPERTENSIVE_CRISIS']
+
+      - name: spo2_status
+        description: "Oxygen saturation classification"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['NORMAL', 'LOW', 'CRITICAL_LOW']
+
+      - name: temperature_status
+        description: "Temperature classification — normal, fever, or hypothermia"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['NORMAL', 'FEVER', 'HYPOTHERMIA']
+
+      - name: has_alert
+        description: "TRUE if any vital sign is outside normal clinical range"
+        tests:
+          - not_null
+
+      - name: reading_timestamp
+        description: "Timestamp of the monitor reading — cleaned to TIMESTAMP_NTZ"
+        tests:
+          - not_null
+
+  - name: mart_patient_health_summary
+    description: "Patient-level health summary with risk classification and ward context. One row per patient showing their latest vitals and overall risk level."
+    columns:
+      - name: patient_id
+        description: "Unique patient identifier"
+        tests:
+          - not_null
+          - unique
+
+      - name: patient_risk_level
+        description: "Overall patient risk — CRITICAL, WARNING, or STABLE"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['CRITICAL', 'WARNING', 'STABLE']
+
+      - name: ward
+        description: "Hospital ward"
+        tests:
+          - not_null
+
+      - name: current_heart_rate_bpm
+        description: "Most recent heart rate reading in BPM"
+
+      - name: current_spo2_pct
+        description: "Most recent oxygen saturation percentage"
+
+      - name: abnormal_vitals_count
+        description: "Count of vital signs currently outside normal range — 0 to 4"
+        tests:
+          - not_null
+
+      - name: last_reading_at
+        description: "Timestamp of the most recent monitor reading for this patient"
+        tests:
+          - not_null
+
+      - name: minutes_since_last_reading
+        description: "Minutes elapsed since last monitor reading — high value may indicate disconnected monitor"
