@@ -1,0 +1,89 @@
+# dbt_project.yml
+# PURPOSE: Main dbt configuration for healthcare patient vitals pipeline
+#
+# This file tells dbt:
+# - Project name and version
+# - Where to find models, tests, macros
+# - How to materialize each layer in Snowflake
+# - Which database and schema each layer writes to
+#
+# Streaming pipelines have different materialization needs vs batch:
+# - Staging: ephemeral (no storage — computed inline)
+# - Marts: incremental (only process NEW records — efficient for streaming)
+
+name: 'healthcare_vitals_pipeline'
+version: '1.0.0'
+config-version: 2
+
+# Profile name — matches profiles.yml on your local machine
+# profiles.yml stores your Snowflake credentials securely
+profile: 'healthcare_vitals_pipeline'
+
+# File paths — tell dbt where to find everything
+model-paths:  ["models"]
+test-paths:   ["tests"]
+seed-paths:   ["seeds"]
+macro-paths:  ["macros"]
+
+# Compiled SQL output — gitignored, not uploaded to GitHub
+target-path:  "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# ─────────────────────────────────────────────────────────────────
+# MODEL CONFIGURATIONS
+# Controls HOW each layer is stored in Snowflake
+# Streaming pipelines need different strategy than batch
+# ─────────────────────────────────────────────────────────────────
+
+models:
+  healthcare_vitals_pipeline:
+
+    staging:
+      # EPHEMERAL — staging exists only as a CTE inside other models
+      # Not stored as a view or table in Snowflake
+      # Why? Streaming data arrives continuously — storing staging
+      # separately would create millions of tiny views over time
+      # Ephemeral = staging SQL is inlined into mart query directly
+      # More efficient for high-frequency streaming data
+      +materialized: ephemeral
+      +schema: staging
+
+    marts:
+      # INCREMENTAL — only processes NEW records each run
+      # This is the key difference from batch pipelines
+      #
+      # Batch pipeline (Project 1): re-processes ALL data every run
+      # Streaming pipeline (this): only processes records added since last run
+      #
+      # Why incremental for streaming?
+      # - New vitals arrive every 2 seconds
+      # - Re-processing all historical data every run = expensive and slow
+      # - Incremental finds only new records using unique_key
+      # - Much faster and cheaper for continuous streaming data
+      +materialized: incremental
+      +unique_key: patient_id
+      +schema: marts
+      +on_schema_change: sync_all_columns
+
+
+# ─────────────────────────────────────────────────────────────────
+# VARIABLE DEFINITIONS
+# Variables can be passed at runtime — useful for backfilling
+# Example: dbt run --vars '{"start_date": "2026-01-01"}'
+# ─────────────────────────────────────────────────────────────────
+
+vars:
+  # Lookback window for incremental models
+  # Only process vitals from last 24 hours by default
+  # Override with --vars for backfill scenarios
+  incremental_lookback_hours: 24
+
+  # Clinical alert thresholds — defined here so easy to update
+  # Change these without touching SQL model code
+  heart_rate_high_threshold: 100
+  heart_rate_low_threshold:  60
+  spo2_critical_threshold:   90
+  spo2_low_threshold:        95
+  bp_crisis_threshold:       180
